@@ -4,10 +4,9 @@
 #  By Team Zen Development — https://www.zendevelopment.in
 #
 #  Plugins: AuthMe · ClearLagg · NPanel · ViaVersion ·
-#           ViaBackwards · EssentialsX
+#           ViaBackwards · EssentialsX · Playit.gg
 #
 #  Tested on: Ubuntu 22.04 / 24.04 / Debian 12
-#  Requires : Java 21+, curl, jq, wget, screen
 # ============================================================
 
 set -euo pipefail
@@ -33,11 +32,11 @@ ONLINE_MODE="${ONLINE_MODE:-false}"
 [[ $EUID -ne 0 ]] && error "Please run as root: sudo bash $0"
 
 echo -e "${BOLD}"
-echo "  ╔══════════════════════════════════════════════╗"
-echo "  ║   Minecraft Paper Server — Auto Installer   ║"
-echo "  ║   AuthMe · ClearLagg · NPanel · Via* · Ess  ║"
-echo "  ║   By Team Zen Development                   ║"
-echo "  ╚══════════════════════════════════════════════╝"
+echo "  ╔══════════════════════════════════════════════════╗"
+echo "  ║   Minecraft Paper Server — Auto Installer       ║"
+echo "  ║   AuthMe · ClearLagg · NPanel · Via* · Playit  ║"
+echo "  ║   By Team Zen Development                       ║"
+echo "  ╚══════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
 # ─── 1. System dependencies ─────────────────────────────────
@@ -49,7 +48,7 @@ apt-get install -y -qq curl wget jq screen ca-certificates gnupg lsb-release > /
 
 # ─── 2. Java 21 ─────────────────────────────────────────────
 JAVA_VER=$(java -version 2>&1 | awk -F '"' '/version/ {print $2}' | cut -d'.' -f1 2>/dev/null || echo "0")
-if [[ "$JAVA_VER" -lt 21 ]] 2>/dev/null; then
+if [[ "${JAVA_VER:-0}" -lt 21 ]] 2>/dev/null; then
     info "Installing Java 21 (Temurin)..."
     wget -qO- https://packages.adoptium.net/artifactory/api/gpg/key/public \
         | gpg --dearmor -o /usr/share/keyrings/adoptium.gpg
@@ -75,35 +74,45 @@ chown -R "$MC_USER:$MC_USER" "$INSTALL_DIR"
 # ─── 4. Download latest PaperMC ─────────────────────────────
 info "Fetching latest stable PaperMC build..."
 
-# Use the v2 API (stable, well-documented, correct structure)
 PAPERMC_API="https://api.papermc.io/v2/projects/paper"
 
-# Step 1: get the latest MC version string
-LATEST_MC=$(curl -fsSL "$PAPERMC_API" \
-    | jq -r '.versions[-1]')
+# Check the last 5 versions newest-first and pick the first that has builds
+ALL_VERSIONS=$(curl -fsSL "$PAPERMC_API" | jq -r '.versions[]' | tail -5 | tac)
 
-[[ -z "$LATEST_MC" || "$LATEST_MC" == "null" ]] \
-    && error "Could not get latest Minecraft version from PaperMC API."
+LATEST_MC=""
+LATEST_BUILD=""
 
-info "Latest MC version: $LATEST_MC"
+for MC_VER in $ALL_VERSIONS; do
+    info "Checking builds for $MC_VER ..."
+    BUILDS_JSON=$(curl -fsSL "$PAPERMC_API/versions/$MC_VER/builds" 2>/dev/null || true)
 
-# Step 2: get the latest stable build number for that version
-LATEST_BUILD=$(curl -fsSL "$PAPERMC_API/versions/$LATEST_MC/builds" \
-    | jq -r '[.builds[] | select(.channel=="default")] | last | .build')
+    # Try "default" channel (stable) first
+    BUILD=$(echo "$BUILDS_JSON" | jq -r \
+        '[.builds[]? | select(.channel=="default")] | last | .build // empty' 2>/dev/null || true)
 
-[[ -z "$LATEST_BUILD" || "$LATEST_BUILD" == "null" ]] \
-    && error "Could not get latest stable build for $LATEST_MC."
+    # Fallback: just grab the last build regardless of channel
+    if [[ -z "$BUILD" || "$BUILD" == "null" ]]; then
+        BUILD=$(echo "$BUILDS_JSON" | jq -r \
+            '.builds[-1].build // empty' 2>/dev/null || true)
+    fi
 
-info "Latest stable build: $LATEST_BUILD"
+    if [[ -n "$BUILD" && "$BUILD" != "null" ]]; then
+        LATEST_MC="$MC_VER"
+        LATEST_BUILD="$BUILD"
+        success "Found: PaperMC $LATEST_MC build #$LATEST_BUILD"
+        break
+    fi
+done
 
-# Step 3: compose the direct download URL
+[[ -z "$LATEST_MC" ]] && error "Could not find any PaperMC build. Check your internet connection."
+
 JAR_NAME="paper-${LATEST_MC}-${LATEST_BUILD}.jar"
 PAPER_URL="$PAPERMC_API/versions/$LATEST_MC/builds/$LATEST_BUILD/downloads/$JAR_NAME"
 
 PAPER_JAR="$INSTALL_DIR/paper.jar"
 info "Downloading PaperMC $LATEST_MC build #$LATEST_BUILD..."
 wget -q --show-progress -O "$PAPER_JAR" "$PAPER_URL" \
-    || error "Failed to download PaperMC. Check your internet connection."
+    || error "Failed to download PaperMC JAR."
 success "PaperMC downloaded → $PAPER_JAR"
 
 # ─── Helper: download a plugin JAR ──────────────────────────
@@ -112,12 +121,11 @@ dl_plugin() {
     info "Downloading plugin: $name..."
     wget -q --show-progress -O "$dest" "$url" \
         && success "$name → plugins/$3" \
-        || { warn "Failed to download $name — install it manually."; return 1; }
+        || { warn "Failed to download $name — install it manually."; rm -f "$dest"; return 1; }
 }
 
 # ─── Helper: GitHub latest release asset URL ────────────────
 gh_latest_url() {
-    # $1 = owner/repo   $2 = grep pattern for filename
     curl -fsSL "https://api.github.com/repos/$1/releases/latest" 2>/dev/null \
         | jq -r '.assets[].browser_download_url' 2>/dev/null \
         | grep -iE "$2" \
@@ -126,44 +134,34 @@ gh_latest_url() {
 
 # ─── 5. Plugins ─────────────────────────────────────────────
 
-# — AuthMe Reloaded (Paper build) —
+# — AuthMe Reloaded —
 info "Resolving AuthMe Reloaded..."
-AUTHME_URL=$(gh_latest_url "AuthMe/AuthMeReloaded" "paper.*\.jar$")
-[[ -z "$AUTHME_URL" ]] && \
-    AUTHME_URL=$(gh_latest_url "AuthMe/AuthMeReloaded" "AuthMe.*\.jar$")
+AUTHME_URL=$(gh_latest_url "AuthMe/AuthMeReloaded" "AuthMe.*\.jar$")
 if [[ -n "$AUTHME_URL" ]]; then
     dl_plugin "AuthMe Reloaded" "$AUTHME_URL" "AuthMe.jar"
 else
-    warn "AuthMe: could not auto-download. Get it from:"
-    warn "  https://github.com/AuthMe/AuthMeReloaded/releases"
+    warn "AuthMe: manual download → https://github.com/AuthMe/AuthMeReloaded/releases"
 fi
 
 # — ClearLagg —
 info "Resolving ClearLagg..."
 CLEARLAGG_URL=$(curl -fsSL \
-    "https://api.modrinth.com/v2/project/clearlagg/version?loaders=%5B%22paper%22%5D&featured=true" \
-    2>/dev/null | jq -r '.[0].files[0].url // empty' 2>/dev/null || true)
-[[ -z "$CLEARLAGG_URL" ]] && \
-    CLEARLAGG_URL=$(curl -fsSL \
     "https://api.modrinth.com/v2/project/clearlagg/version" \
     2>/dev/null | jq -r '.[0].files[0].url // empty' 2>/dev/null || true)
 if [[ -n "$CLEARLAGG_URL" ]]; then
     dl_plugin "ClearLagg" "$CLEARLAGG_URL" "ClearLagg.jar"
 else
-    warn "ClearLagg: could not auto-download. Get it from:"
-    warn "  https://www.spigotmc.org/resources/clearlagg.68271/"
+    warn "ClearLagg: manual download → https://www.spigotmc.org/resources/clearlagg.68271/"
 fi
 
 # — NPanel —
 info "Resolving NPanel..."
 NPANEL_URL=$(gh_latest_url "nerotvlive/NPanel" "\.jar$")
-[[ -z "$NPANEL_URL" ]] && \
-    NPANEL_URL=$(gh_latest_url "danieldieeins/NPanel" "\.jar$")
+[[ -z "$NPANEL_URL" ]] && NPANEL_URL=$(gh_latest_url "danieldieeins/NPanel" "\.jar$")
 if [[ -n "$NPANEL_URL" ]]; then
     dl_plugin "NPanel" "$NPANEL_URL" "NPanel.jar"
 else
-    warn "NPanel: could not auto-download. Get it from:"
-    warn "  https://hangar.papermc.io/nerotvlive/npanel"
+    warn "NPanel: manual download → https://hangar.papermc.io/nerotvlive/npanel"
 fi
 
 # — ViaVersion —
@@ -172,8 +170,7 @@ VIAVERSION_URL=$(gh_latest_url "ViaVersion/ViaVersion" "ViaVersion-[0-9].*\.jar$
 if [[ -n "$VIAVERSION_URL" ]]; then
     dl_plugin "ViaVersion" "$VIAVERSION_URL" "ViaVersion.jar"
 else
-    warn "ViaVersion: could not auto-download. Get it from:"
-    warn "  https://github.com/ViaVersion/ViaVersion/releases"
+    warn "ViaVersion: manual download → https://github.com/ViaVersion/ViaVersion/releases"
 fi
 
 # — ViaBackwards —
@@ -182,20 +179,25 @@ VIABACK_URL=$(gh_latest_url "ViaVersion/ViaBackwards" "ViaBackwards-[0-9].*\.jar
 if [[ -n "$VIABACK_URL" ]]; then
     dl_plugin "ViaBackwards" "$VIABACK_URL" "ViaBackwards.jar"
 else
-    warn "ViaBackwards: could not auto-download. Get it from:"
-    warn "  https://github.com/ViaVersion/ViaBackwards/releases"
+    warn "ViaBackwards: manual download → https://github.com/ViaVersion/ViaBackwards/releases"
 fi
 
 # — EssentialsX —
 info "Resolving EssentialsX..."
-ESSENTIALS_URL=$(gh_latest_url "EssentialsX/Essentials" "^EssentialsX-[0-9].*\.jar$")
-[[ -z "$ESSENTIALS_URL" ]] && \
-    ESSENTIALS_URL=$(gh_latest_url "EssentialsX/Essentials" "EssentialsX-[0-9].*\.jar$")
+ESSENTIALS_URL=$(gh_latest_url "EssentialsX/Essentials" "EssentialsX-[0-9].*\.jar$")
 if [[ -n "$ESSENTIALS_URL" ]]; then
     dl_plugin "EssentialsX" "$ESSENTIALS_URL" "EssentialsX.jar"
 else
-    warn "EssentialsX: could not auto-download. Get it from:"
-    warn "  https://github.com/EssentialsX/Essentials/releases"
+    warn "EssentialsX: manual download → https://github.com/EssentialsX/Essentials/releases"
+fi
+
+# — Playit.gg —
+info "Resolving Playit.gg plugin..."
+PLAYIT_URL=$(gh_latest_url "playit-cloud/playit-minecraft-plugin" "playit-minecraft-plugin.*\.jar$")
+if [[ -n "$PLAYIT_URL" ]]; then
+    dl_plugin "Playit.gg" "$PLAYIT_URL" "playit.jar"
+else
+    warn "Playit: manual download → https://github.com/playit-cloud/playit-minecraft-plugin/releases"
 fi
 
 # ─── 6. Accept EULA ─────────────────────────────────────────
@@ -227,7 +229,7 @@ canViewConsole: true
 canManagePlayers: true
 EOF
 
-# ─── 9. start.sh (Aikar's JVM flags) ───────────────────────
+# ─── 9. start.sh (Aikar's optimised JVM flags) ──────────────
 info "Writing start script..."
 cat > "$INSTALL_DIR/start.sh" << STARTSCRIPT
 #!/usr/bin/env bash
@@ -286,22 +288,22 @@ chown -R "$MC_USER:$MC_USER" "$INSTALL_DIR"
 # ─── 11. Firewall ───────────────────────────────────────────
 if command -v ufw &>/dev/null; then
     info "Configuring UFW firewall..."
-    ufw allow "$MC_PORT"/tcp  comment "Minecraft"  > /dev/null 2>&1 || true
-    ufw allow "$NPANEL_PORT"/tcp comment "NPanel"  > /dev/null 2>&1 || true
-    success "UFW rules added for ports $MC_PORT and $NPANEL_PORT."
+    ufw allow "$MC_PORT"/tcp     comment "Minecraft" > /dev/null 2>&1 || true
+    ufw allow "$NPANEL_PORT"/tcp comment "NPanel"    > /dev/null 2>&1 || true
+    success "UFW: ports $MC_PORT and $NPANEL_PORT opened."
 fi
 
-# ─── 12. First-run boot to generate configs ─────────────────
-info "Running server once to generate config files (up to 60s)..."
+# ─── 12. First-run boot to generate config files ────────────
+info "Running server once to generate configs (up to 60s)..."
 sudo -u "$MC_USER" bash -c "cd $INSTALL_DIR && \
     java -Xms512M -Xmx1G -jar paper.jar nogui" &
 SERVER_PID=$!
-sleep 50
+sleep 55
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 success "Config generation complete."
 
-# ─── 13. Generate NPanel credentials & start ────────────────
+# ─── 13. NPanel credentials & final start ───────────────────
 NPANEL_USER="admin"
 NPANEL_PASS="$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-12)"
 
@@ -314,16 +316,16 @@ screen -S minecraft -X stuff "/addlogin ${NPANEL_USER} ${NPANEL_PASS}\n" 2>/dev/
 sleep 3
 success "NPanel credentials set."
 
-# ─── 14. Get public IP ──────────────────────────────────────
+# ─── 14. Detect public IP & playit tunnel ───────────────────
 PUBLIC_IP=$(curl -fsSL https://api.ipify.org 2>/dev/null \
     || curl -fsSL https://ifconfig.me 2>/dev/null \
     || echo "YOUR_VPS_IP")
 
-# ─── 15. Summary ────────────────────────────────────────────
+# ─── 15. Done! ──────────────────────────────────────────────
 echo ""
-echo -e "${GREEN}${BOLD}════════════════════════════════════════════════════${NC}"
-echo -e "${GREEN}${BOLD}   ✅  Installation Complete! — Team Zen Development ${NC}"
-echo -e "${GREEN}${BOLD}════════════════════════════════════════════════════${NC}"
+echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════════${NC}"
+echo -e "${GREEN}${BOLD}   ✅  Installation Complete! — Team Zen Development  ${NC}"
+echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════════${NC}"
 echo ""
 echo -e "  ${BOLD}🎮 Minecraft Server${NC}"
 echo -e "    Address  : ${CYAN}$PUBLIC_IP:$MC_PORT${NC}"
@@ -334,6 +336,13 @@ echo -e "    URL      : ${CYAN}http://$PUBLIC_IP:$NPANEL_PORT${NC}"
 echo -e "    Username : ${CYAN}$NPANEL_USER${NC}"
 echo -e "    Password : ${CYAN}$NPANEL_PASS${NC}"
 echo ""
+echo -e "  ${BOLD}🌐 Playit.gg Tunnel${NC}"
+echo -e "    ${YELLOW}Check your server console for the Playit claim URL!${NC}"
+echo -e "    Run: ${CYAN}screen -r minecraft${NC}  then look for a link like:"
+echo -e "         ${CYAN}https://playit.gg/claim/xxxxx${NC}"
+echo -e "    Visit that URL to claim your free public tunnel address."
+echo -e "    Your players will then connect via: ${CYAN}<yourname>.playit.gg${NC}"
+echo ""
 echo -e "  ${BOLD}🧩 Plugins${NC}"
 echo -e "    • AuthMe Reloaded   — login/register system"
 echo -e "    • ClearLagg         — lag reduction"
@@ -341,6 +350,7 @@ echo -e "    • NPanel            — web control panel"
 echo -e "    • ViaVersion        — multi-version support"
 echo -e "    • ViaBackwards      — older client support"
 echo -e "    • EssentialsX       — core commands"
+echo -e "    • Playit.gg         — free public IP tunnel (no port forwarding)"
 echo ""
 echo -e "  ${BOLD}🛠  Useful Commands${NC}"
 echo -e "    Start   : ${YELLOW}systemctl start minecraft${NC}"
@@ -352,4 +362,4 @@ echo -e "  ${BOLD}📁 Files${NC} → ${CYAN}$INSTALL_DIR${NC}"
 echo ""
 echo -e "  🌐 ${CYAN}https://www.zendevelopment.in${NC}"
 echo -e "  ${YELLOW}⚠  Save your NPanel credentials — shown only once!${NC}"
-echo -e "${GREEN}${BOLD}════════════════════════════════════════════════════${NC}"
+echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════════${NC}"
