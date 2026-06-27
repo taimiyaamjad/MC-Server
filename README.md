@@ -4,12 +4,14 @@
 <img src="https://img.shields.io/badge/Java-21%2B-orange?style=for-the-badge&logo=openjdk&logoColor=white"/>
 <img src="https://img.shields.io/badge/Platform-Ubuntu%20%7C%20Debian-blue?style=for-the-badge&logo=linux&logoColor=white"/>
 <img src="https://img.shields.io/badge/Playit.gg-Tunnel%20Ready-blueviolet?style=for-the-badge"/>
+<img src="https://img.shields.io/badge/No%20systemctl-screen%20%2B%20cron-success?style=for-the-badge"/>
 <img src="https://img.shields.io/badge/License-MIT-purple?style=for-the-badge"/>
 
 # 🎮 MC-Server Auto Installer
 
 **A one-command Minecraft Paper server installer for any VPS**
 *Complete with web control panel, public tunnel IP, and essential plugins — ready in minutes.*
+*No systemctl required — works on any Linux VPS!*
 
 <br/>
 
@@ -26,11 +28,12 @@ This single bash script sets up a **production-ready Minecraft Paper server** on
 
 - ✅ Latest **PaperMC** (auto-fetched from the official API)
 - ✅ **NPanel** web control panel accessible in your browser
-- ✅ **Playit.gg** tunnel — gives your server a free public IP with no port forwarding
-- ✅ Essential plugins pre-installed & auto-downloaded
+- ✅ **Playit.gg** plugin — gives your server a free public IP with no port forwarding
+- ✅ All plugins pre-installed & auto-downloaded via GitHub/Modrinth APIs
 - ✅ Optimized JVM flags (Aikar's flags)
-- ✅ systemd service (auto-restart on reboot)
-- ✅ Firewall rules configured automatically
+- ✅ **No systemctl needed** — runs via `screen` + `crontab` (works on any VPS)
+- ✅ Auto-restarts on reboot via crontab
+- ✅ Simple `mc.sh` control script — start, stop, restart, logs in one command
 
 ---
 
@@ -54,6 +57,7 @@ This single bash script sets up a **production-ready Minecraft Paper server** on
 - Ubuntu 22.04 / 24.04 or Debian 12
 - Root or sudo access
 - At least **2 GB RAM** (4 GB recommended)
+- **No systemctl required!**
 
 ### One-Line Install
 
@@ -87,22 +91,43 @@ sudo bash install-mc-server.sh
 
 ---
 
-## 🌐 Playit.gg — Free Public IP Tunnel
+## 🛠️ Managing Your Server
 
-No port forwarding? No problem. **Playit.gg** creates a permanent public tunnel address for your server so anyone can join from anywhere.
+The script creates a simple `mc.sh` control script — **no systemctl needed**.
 
-**How it works after install:**
+```bash
+cd /opt/minecraft
 
-1. Start your server: `systemctl start minecraft`
-2. Open the console: `screen -r minecraft`
-3. Look for a claim URL that appears in the console:
+./mc.sh start      # Start the server
+./mc.sh stop       # Stop the server
+./mc.sh restart    # Restart the server
+./mc.sh status     # Check if server is running
+./mc.sh console    # Attach to live console  (Ctrl+A then D to detach)
+./mc.sh logs       # Follow live server logs
+```
+
+The server also **auto-starts on reboot** via a crontab entry added automatically during install.
+
+---
+
+## 🌐 Playit.gg — Free Public IP
+
+No port forwarding? No problem. **Playit.gg** creates a permanent public tunnel address so anyone can join from anywhere — for free.
+
+**How to activate after install:**
+
+1. Open the server console:
+   ```bash
+   cd /opt/minecraft && ./mc.sh console
+   ```
+2. Look for a claim URL printed automatically on startup:
    ```
    https://playit.gg/claim/xxxxxxxxxxxxxxxx
    ```
-4. Visit that link, sign in (free), and your tunnel is activated
-5. Your players connect using your assigned address, e.g. `yourserver.playit.gg`
+3. Visit that link, sign in (free account), and your tunnel activates
+4. Your players connect using your assigned address e.g. `yourserver.playit.gg`
 
-> 💡 The tunnel address is **permanent and static** — it won't change when you restart your server.
+> 💡 The tunnel address is **permanent and static** — it won't change when you restart.
 
 ---
 
@@ -114,7 +139,7 @@ Manage your server from any browser — no PHP, no external web server needed.
 http://YOUR_VPS_IP:8080
 ```
 
-Your **auto-generated credentials** are printed at the end of the install. You can also manage users via the in-game/console commands:
+Your **auto-generated credentials** are printed at the end of the install. You can also manage users via console:
 
 ```
 /addlogin <username> <password>   → Add a panel user
@@ -130,7 +155,9 @@ Your **auto-generated credentials** are printed at the end of the install. You c
 ```
 /opt/minecraft/
 ├── paper.jar              ← PaperMC server
-├── start.sh               ← Optimized startup script
+├── start.sh               ← Raw startup script
+├── stop.sh                ← Raw stop script
+├── mc.sh                  ← Master control: start/stop/restart/console/logs
 ├── eula.txt               ← Auto-accepted EULA
 ├── server.properties      ← Server configuration
 └── plugins/
@@ -144,20 +171,6 @@ Your **auto-generated credentials** are printed at the end of the install. You c
     └── NPanel/
         └── config.yml
 ```
-
----
-
-## 🛠️ Managing Your Server
-
-| Action | Command |
-|---|---|
-| Start server | `systemctl start minecraft` |
-| Stop server | `systemctl stop minecraft` |
-| Restart server | `systemctl restart minecraft` |
-| Enable on boot | `systemctl enable minecraft` |
-| View live console | `screen -r minecraft` |
-| Detach from console | `Ctrl + A`, then `D` |
-| View logs | `journalctl -u minecraft -f` |
 
 ---
 
@@ -175,19 +188,26 @@ Your **auto-generated credentials** are printed at the end of the install. You c
 ## ❓ Troubleshooting
 
 **Server won't start?**
-Check logs: `journalctl -u minecraft -n 50`
+```bash
+cd /opt/minecraft && ./mc.sh logs
+```
 
 **NPanel not loading?**
-Make sure port 8080 is open: `ufw allow 8080/tcp`
+```bash
+ufw allow 8080/tcp
+```
 
 **Playit claim URL not showing?**
-Open the console (`screen -r minecraft`) and wait 10–20 seconds after startup. The URL appears automatically.
+Open the console (`./mc.sh console`) and wait 10–20 seconds after startup.
 
 **Plugin didn't download?**
-Some plugins may need manual download if the GitHub API rate-limits. Check install output warnings and drop the JAR into `/opt/minecraft/plugins/`, then restart the server.
+Some plugins may hit GitHub API rate limits. Check install output warnings and manually drop the JAR into `/opt/minecraft/plugins/`, then run `./mc.sh restart`.
 
 **ClearLagg not found?**
-Download it manually from [SpigotMC](https://www.spigotmc.org/resources/clearlagg.68271/) and place it in `/opt/minecraft/plugins/`.
+Download manually from [SpigotMC](https://www.spigotmc.org/resources/clearlagg.68271/) and place in `/opt/minecraft/plugins/`.
+
+**Server not starting on reboot?**
+Check crontab: `crontab -l` — you should see a `@reboot` line for minecraft.
 
 ---
 
