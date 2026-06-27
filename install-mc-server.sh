@@ -10,7 +10,7 @@
 #  No systemctl required — runs via screen
 # ============================================================
 
-set -euo pipefail
+set -uo pipefail
 
 # ─── Colour helpers ─────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -41,8 +41,9 @@ echo -e "${NC}"
 info "Updating package lists..."
 apt-get update -qq
 
-info "Installing dependencies (curl, jq, wget, screen)..."
-apt-get install -y -qq curl wget jq screen ca-certificates gnupg lsb-release > /dev/null
+info "Installing dependencies (curl, jq, wget, screen, cron)..."
+apt-get install -y -qq curl wget jq screen ca-certificates gnupg lsb-release cron > /dev/null || \
+apt-get install -y -qq curl wget jq screen ca-certificates gnupg lsb-release > /dev/null || true
 
 # ─── 2. Java 21 ─────────────────────────────────────────────
 JAVA_VER=$(java -version 2>&1 | awk -F '"' '/version/ {print $2}' | cut -d'.' -f1 2>/dev/null || echo "0")
@@ -334,12 +335,49 @@ esac
 CONTROLSCRIPT
 chmod +x "$INSTALL_DIR/mc.sh"
 
-# ─── 12. Auto-start on reboot via crontab ───────────────────
-info "Setting up auto-start on reboot via crontab..."
+# ─── 12. Auto-start on reboot ───────────────────────────────
+info "Setting up auto-start on reboot..."
 CRON_LINE="@reboot sleep 10 && screen -dmS minecraft bash $INSTALL_DIR/start.sh"
-# Add only if not already present
-( crontab -l 2>/dev/null | grep -v "minecraft"; echo "$CRON_LINE" ) | crontab -
-success "Auto-start on reboot configured via crontab."
+CRON_OK=false
+
+# Try 1: crontab already available
+if command -v crontab &>/dev/null; then
+    ( crontab -l 2>/dev/null | grep -v "minecraft"; echo "$CRON_LINE" ) | crontab -
+    CRON_OK=true
+    success "Auto-start configured via crontab."
+else
+    # Try 2: install cron package
+    info "crontab not found — installing cron package..."
+    if apt-get install -y -qq cron > /dev/null 2>&1 && command -v crontab &>/dev/null; then
+        ( crontab -l 2>/dev/null | grep -v "minecraft"; echo "$CRON_LINE" ) | crontab -
+        cron 2>/dev/null || service cron start 2>/dev/null || true
+        CRON_OK=true
+        success "cron installed and auto-start configured."
+    fi
+fi
+
+# Try 3: drop into /etc/cron.d (no crontab binary needed)
+if [[ "$CRON_OK" == "false" ]] && [[ -d /etc/cron.d ]]; then
+    echo "@reboot root sleep 10 && screen -dmS minecraft bash $INSTALL_DIR/start.sh" \
+        > /etc/cron.d/minecraft
+    chmod 644 /etc/cron.d/minecraft
+    CRON_OK=true
+    success "Auto-start configured via /etc/cron.d/minecraft."
+fi
+
+# Try 4: rc.local fallback
+if [[ "$CRON_OK" == "false" ]]; then
+    RC_LOCAL="/etc/rc.local"
+    if [[ ! -f "$RC_LOCAL" ]]; then
+        printf "#!/usr/bin/env bash\nexit 0\n" > "$RC_LOCAL"
+        chmod +x "$RC_LOCAL"
+    fi
+    sed -i "/^exit 0/i sleep 10 \&\& screen -dmS minecraft bash $INSTALL_DIR/start.sh" "$RC_LOCAL"
+    CRON_OK=true
+    success "Auto-start configured via /etc/rc.local (fallback)."
+fi
+
+[[ "$CRON_OK" == "false" ]] && warn "Auto-start not configured. Start manually: cd $INSTALL_DIR && ./mc.sh start"
 
 # ─── 13. First-run boot to generate config files ────────────
 info "Running server once to generate config files (up to 60s)..."
