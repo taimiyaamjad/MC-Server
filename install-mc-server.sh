@@ -24,7 +24,7 @@ error()   { echo -e "${RED}[ERR]${NC}   $*"; exit 1; }
 INSTALL_DIR="${MC_DIR:-/opt/minecraft}"
 MC_USER="${MC_USER:-$(whoami)}"
 MC_PORT="${MC_PORT:-25565}"
-NPANEL_PORT="${NPANEL_PORT:-8080}"
+NPANEL_PORT="${NPANEL_PORT:-4567}"
 MAX_RAM="${MAX_RAM:-2G}"
 MIN_RAM="${MIN_RAM:-1G}"
 ONLINE_MODE="${ONLINE_MODE:-false}"
@@ -276,6 +276,16 @@ start_server() {
         echo "Server is already running. Use './mc.sh console' to attach."
         return
     fi
+    # Re-apply NPanel port config before every start (in case it was overwritten)
+    for cfg in \
+        "\$INSTALL_DIR/plugins/NPanel/config.yml" \
+        "\$INSTALL_DIR/plugins/JPanel/config.yml" \
+        "\$INSTALL_DIR/plugins/jpanel/config.yml"; do
+        if [ -f "\$cfg" ]; then
+            sed -i "s/^port:.*/port: 4567/" "\$cfg"
+            sed -i "s/^hostname:.*/hostname: 0.0.0.0/" "\$cfg"
+        fi
+    done
     echo "Starting Minecraft server..."
     screen -dmS \$SESSION bash \$INSTALL_DIR/start.sh
     sleep 3
@@ -391,13 +401,28 @@ success "Config generation complete."
 # gets replaced with the correct port before the real start.
 info "Writing NPanel config (port $NPANEL_PORT)..."
 mkdir -p "$INSTALL_DIR/plugins/NPanel"
+# Write NPanel config — port 4567 is NPanel/JPanel's real default
+# We explicitly set it so the port is predictable
 cat > "$INSTALL_DIR/plugins/NPanel/config.yml" << NPANELEOF
 port: $NPANEL_PORT
+hostname: 0.0.0.0
 canSendCommands: true
 canViewConsole: true
 canManagePlayers: true
 NPANELEOF
-success "NPanel config written with port $NPANEL_PORT"
+success "NPanel config written → port $NPANEL_PORT"
+
+# Also patch it into any nested config location NPanel might use
+for cfg in \
+    "$INSTALL_DIR/plugins/NPanel/config.yml" \
+    "$INSTALL_DIR/plugins/jpanel/config.yml" \
+    "$INSTALL_DIR/plugins/JPanel/config.yml"; do
+    if [ -f "$cfg" ]; then
+        sed -i "s/^port:.*/port: $NPANEL_PORT/" "$cfg"
+        sed -i "s/^hostname:.*/hostname: 0.0.0.0/" "$cfg"
+        info "Patched port in: $cfg"
+    fi
+done
 
 # No firewall config needed — using code-server port forwarding
 # Access NPanel via: https://YOUR-CODESERVER-DOMAIN/proxy/$NPANEL_PORT/
