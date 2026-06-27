@@ -399,13 +399,8 @@ canManagePlayers: true
 NPANELEOF
 success "NPanel config written with port $NPANEL_PORT"
 
-# Also open the port in ufw if available
-if command -v ufw &>/dev/null; then
-    ufw allow "$NPANEL_PORT"/tcp comment "NPanel" > /dev/null 2>&1 || true
-    ufw allow "$MC_PORT"/tcp comment "Minecraft" > /dev/null 2>&1 || true
-    ufw --force enable > /dev/null 2>&1 || true
-    success "Firewall: ports $MC_PORT and $NPANEL_PORT opened."
-fi
+# No firewall config needed — using code-server port forwarding
+# Access NPanel via: https://YOUR-CODESERVER-DOMAIN/proxy/$NPANEL_PORT/
 
 # ─── 14. Start server & add NPanel user ─────────────────────
 NPANEL_USER="admin"
@@ -413,17 +408,27 @@ NPANEL_PASS="$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-12)"
 
 info "Starting server..."
 screen -dmS minecraft bash "$INSTALL_DIR/start.sh"
-sleep 25
+
+# Wait for server to fully load before injecting NPanel user
+info "Waiting for server to finish loading (up to 90s)..."
+for i in $(seq 1 90); do
+    if [ -f "$INSTALL_DIR/logs/latest.log" ] &&        grep -qE "Done \([0-9]" "$INSTALL_DIR/logs/latest.log" 2>/dev/null; then
+        success "Server fully loaded!"
+        break
+    fi
+    sleep 1
+done
 
 info "Adding NPanel admin user..."
 screen -S minecraft -X stuff "/addlogin ${NPANEL_USER} ${NPANEL_PASS}$(printf '\r')" 2>/dev/null || true
 sleep 3
 success "NPanel credentials set."
 
-# ─── 15. Detect public IP ───────────────────────────────────
-PUBLIC_IP=$(curl -fsSL https://api.ipify.org 2>/dev/null \
-    || curl -fsSL https://ifconfig.me 2>/dev/null \
-    || echo "YOUR_VPS_IP")
+# ─── 15. Detect actual NPanel port from logs ────────────────
+sleep 3
+ACTUAL_PORT=$(grep -oE "port [0-9]+" "$INSTALL_DIR/logs/latest.log" 2>/dev/null     | grep -v "25565\|server\|query" | tail -1 | awk '{print $2}' || true)
+[ -z "$ACTUAL_PORT" ] && ACTUAL_PORT=$(grep -oE ":[0-9]{4,5}" "$INSTALL_DIR/logs/latest.log" 2>/dev/null     | grep -v ":25565" | tail -1 | tr -d ':' || true)
+[ -z "$ACTUAL_PORT" ] && ACTUAL_PORT="$NPANEL_PORT"
 
 # ─── 16. Done! ──────────────────────────────────────────────
 echo ""
@@ -432,30 +437,34 @@ echo -e "${GREEN}${BOLD}   ✅  Installation Complete! — Team Zen Development 
 echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════════${NC}"
 echo ""
 echo -e "  ${BOLD}🎮 Minecraft Server${NC}"
-echo -e "    Address  : ${CYAN}$PUBLIC_IP:$MC_PORT${NC}"
 echo -e "    Version  : ${CYAN}$LATEST_MC (PaperMC build #$LATEST_BUILD)${NC}"
+echo -e "    MC Port  : ${CYAN}$MC_PORT${NC} (forward via playit.gg — see console)"
 echo ""
 echo -e "  ${BOLD}🖥️  NPanel Web Control Panel${NC}"
-echo -e "    URL      : ${CYAN}http://$PUBLIC_IP:$NPANEL_PORT${NC}"
+echo -e "    Port     : ${CYAN}$ACTUAL_PORT${NC}"
+echo -e "    Access   : ${CYAN}https://YOUR-CODESERVER-DOMAIN/proxy/$ACTUAL_PORT/${NC}"
 echo -e "    Username : ${CYAN}$NPANEL_USER${NC}"
 echo -e "    Password : ${CYAN}$NPANEL_PASS${NC}"
 echo ""
-echo -e "  ${BOLD}🌐 Playit.gg Tunnel${NC}"
-echo -e "    ${YELLOW}Open the console and look for the claim URL:${NC}"
-echo -e "    Run : ${CYAN}cd $INSTALL_DIR && ./mc.sh console${NC}"
+echo -e "  ${BOLD}💡 Code-Server Port Forwarding${NC}"
+echo -e "    In your code-server, go to: ${CYAN}PORTS tab → Forward Port → $ACTUAL_PORT${NC}"
+echo -e "    Or open directly:  ${CYAN}https://YOUR-DOMAIN/proxy/$ACTUAL_PORT/${NC}"
+echo ""
+echo -e "  ${BOLD}🌐 Playit.gg (MC Public Address)${NC}"
+echo -e "    Run: ${CYAN}cd $INSTALL_DIR && ./mc.sh console${NC}"
 echo -e "    Look for: ${CYAN}https://playit.gg/claim/xxxxxxxx${NC}"
-echo -e "    Visit that link to get your permanent public address!"
+echo -e "    Visit that link → get your permanent server address!"
 echo ""
 echo -e "  ${BOLD}🧩 Plugins${NC}"
 echo -e "    • AuthMe Reloaded   — login/register system"
 echo -e "    • ClearLagg         — lag reduction"
-echo -e "    • NPanel            — web control panel"
+echo -e "    • NPanel            — web control panel (port $ACTUAL_PORT)"
 echo -e "    • ViaVersion        — multi-version support"
 echo -e "    • ViaBackwards      — older client support"
 echo -e "    • EssentialsX       — core commands"
 echo -e "    • Playit.gg         — free public IP tunnel"
 echo ""
-echo -e "  ${BOLD}🛠  Server Control (no systemctl needed!)${NC}"
+echo -e "  ${BOLD}🛠  Server Control${NC}"
 echo -e "    ${YELLOW}cd $INSTALL_DIR${NC}"
 echo -e "    Start   : ${YELLOW}./mc.sh start${NC}"
 echo -e "    Stop    : ${YELLOW}./mc.sh stop${NC}"
@@ -466,5 +475,5 @@ echo -e "    Logs    : ${YELLOW}./mc.sh logs${NC}"
 echo ""
 echo -e "  ${BOLD}📁 Files${NC} → ${CYAN}$INSTALL_DIR${NC}"
 echo -e "  🌐 ${CYAN}https://www.zendevelopment.in${NC}"
-echo -e "  ${YELLOW}⚠  Save your NPanel credentials — shown only once!${NC}"
+echo -e "  ${YELLOW}⚠  Save NPanel credentials — shown only once!${NC}"
 echo -e "${GREEN}${BOLD}══════════════════════════════════════════════════════${NC}"
