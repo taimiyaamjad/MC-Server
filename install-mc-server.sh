@@ -210,15 +210,10 @@ allow-flight=false
 enable-command-block=true
 EOF
 
-# ─── 8. NPanel config ───────────────────────────────────────
+# ─── 8. NPanel plugin dir (config written AFTER first-run) ──
+# NPanel overwrites any pre-placed config.yml on first boot,
+# so we create the dir now and write the real config later.
 mkdir -p "$INSTALL_DIR/plugins/NPanel"
-cat > "$INSTALL_DIR/plugins/NPanel/config.yml" << EOF
-# NPanel configuration — do NOT edit while server is running
-port: $NPANEL_PORT
-canSendCommands: true
-canViewConsole: true
-canManagePlayers: true
-EOF
 
 # ─── 9. start.sh ────────────────────────────────────────────
 info "Writing start.sh..."
@@ -379,7 +374,9 @@ fi
 
 [[ "$CRON_OK" == "false" ]] && warn "Auto-start not configured. Start manually: cd $INSTALL_DIR && ./mc.sh start"
 
-# ─── 13. First-run boot to generate config files ────────────
+# ─── 13. First-run boot to generate ALL config files ─────────
+# This lets NPanel create its own default config.yml first.
+# Then we overwrite it with our port setting below.
 info "Running server once to generate config files (up to 60s)..."
 screen -dmS mc_setup bash -c "cd $INSTALL_DIR && \
     java -Xms512M -Xmx1G -jar paper.jar nogui"
@@ -388,6 +385,27 @@ screen -S mc_setup -X stuff "stop$(printf '\r')" 2>/dev/null || true
 sleep 5
 screen -S mc_setup -X quit 2>/dev/null || true
 success "Config generation complete."
+
+# ─── 13b. NOW overwrite NPanel config with our port ──────────
+# We do this AFTER first-run so NPanel's auto-generated file
+# gets replaced with the correct port before the real start.
+info "Writing NPanel config (port $NPANEL_PORT)..."
+mkdir -p "$INSTALL_DIR/plugins/NPanel"
+cat > "$INSTALL_DIR/plugins/NPanel/config.yml" << NPANELEOF
+port: $NPANEL_PORT
+canSendCommands: true
+canViewConsole: true
+canManagePlayers: true
+NPANELEOF
+success "NPanel config written with port $NPANEL_PORT"
+
+# Also open the port in ufw if available
+if command -v ufw &>/dev/null; then
+    ufw allow "$NPANEL_PORT"/tcp comment "NPanel" > /dev/null 2>&1 || true
+    ufw allow "$MC_PORT"/tcp comment "Minecraft" > /dev/null 2>&1 || true
+    ufw --force enable > /dev/null 2>&1 || true
+    success "Firewall: ports $MC_PORT and $NPANEL_PORT opened."
+fi
 
 # ─── 14. Start server & add NPanel user ─────────────────────
 NPANEL_USER="admin"
