@@ -65,6 +65,12 @@ This single bash script sets up a **production-ready Minecraft Paper server** on
 wget -O install.sh https://raw.githubusercontent.com/taimiyaamjad/MC-Server/main/install-mc-server.sh && sudo bash install.sh
 ```
 
+Or for Without Sudo:
+
+```bash
+wget -O install.sh https://raw.githubusercontent.com/taimiyaamjad/MC-Server/main/install-mc-server.sh && sudo bash root.sh
+```
+
 Or clone and run:
 
 ```bash
